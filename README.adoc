@@ -1,0 +1,86 @@
+ifdef::env-github[]
+//https://github.com/scotch-io/All-Github-Emoji-Icons/tree/master
+:tip-caption: :bulb:
+:note-caption: :information_source:
+:important-caption: :heavy_exclamation_mark:
+:caution-caption: :fire:
+:warning-caption: :warning:
+endif::[]
+
+= Kubernetes Sandbox
+
+This repository contains Kubernetes Sandbox environment running on a https://kind.sigs.k8s.io/[Kind cluster] footnote:kind-version[Kind (node) image: https://hub.docker.com/r/kindest/node[kindest/node]:v1.29.2], designed for various types of development and integration purposes. The focus is on creating a local or on-premise workspace to evaluate:
+
+* Kubernetes components with custom configurations,
+* custom application developments on Kubernetes,
+* IoT platforms using Kubernetes (e.g., on Raspberry Pi).
+
+The following components are installed:
+
+* https://metallb.universe.tf/[MetalLB] footnote:metallb-version[MetalLB images: https://quay.io/repository/metallb/controller[quay.io/metallb/controller]:v0.14.4, https://quay.io/repository/metallb/speaker[quay.io/metallb/speaker]:v0.14.4] load balancer
+* https://github.com/prometheus-operator/kube-prometheus[kube-prometheus] monitoring stack: https://prometheus.io/[Prometheus] footnote:prometheus-version[Prometheus image: https://quay.io/repository/prometheus/prometheus[quay.io/prometheus/prometheus]:v2.51.1], https://grafana.com/[Grafana] footnote:grafana-version[Grafana image: https://hub.docker.com/r/grafana/grafana[grafana/grafana]:10.4.1], https://prometheus.io/docs/alerting/latest/alertmanager/[AlertManager] footnote:alertmanager-version[AlertManager image: https://quay.io/repository/prometheus/alertmanager[quay.io/prometheus/alertmanager]:v0.27.0] and https://thanos.io/[Thanos] footnote:thanos-version[Thanos image: https://quay.io/repository/thanos/thanos[quay.io/thanos/thanos]:v0.34.1]
+* https://github.com/cloudnative-pg/cloudnative-pg[CloudNativePG operator] for https://www.postgresql.org/[PostgreSQL] footnote:postgresql-version[PostgreSQL image: custom image based on https://ghcr.io/imusmanmalik/timescaledb-postgis[ghcr.io/imusmanmalik/timescaledb-postgis]:16-3.4] databases
+* https://github.com/strimzi/strimzi-kafka-operator[Strimzi operator] for https://kafka.apache.org/[Kafka] footnote:kafka-version[Kafka image: https://quay.io/repository/strimzi/kafka[quay.io/strimzi/kafka]:0.40.0-kafka-3.7.0] (and related components, like https://debezium.io/[Debezium] footnote:debezium-version[Debezium / KafkaConnect image: custom image based on https://quay.io/repository/strimzi/kafka[quay.io/strimzi/kafka]:0.40.0-kafka-3.7.0])
+** Kafka tools (https://github.com/provectus/kafka-ui[UI for Apache Kafka] footnote:kafkaui-version[KafkaUI version: https://hub.docker.com/r/provectuslabs/kafka-ui[provectuslabs/kafka-ui]:v0.7.1], https://debezium.io/documentation/reference/stable/operations/debezium-ui.html[Debezium UI] footnote:debezium-ui-version[Debezium UI image: https://hub.docker.com/r/debezium/debezium-ui[debezium/debezium-ui]:2.5])
+* https://github.com/artemiscloud/activemq-artemis-operator[ActiveMQ Artemis operator] for https://activemq.apache.org/components/artemis/[ActiveMQ Artemis] footnote:activemq-artemis-version[ActiveMQ Artemis images: https://quay.io/repository/artemiscloud/activemq-artemis-broker-kubernetes[quay.io/artemiscloud/activemq-artemis-broker-kubernetes]:artemis.2.33.0, https://quay.io/repository/artemiscloud/activemq-artemis-broker-init[quay.io/artemiscloud/activemq-artemis-broker-init]:artemis.2.33.0]
+* Istio (Gateway API)
+* Various Kubernetes tools: https://sealed-secrets.netlify.app/[Sealed Secrets], https://github.com/stakater/Reloader[Reloader]
+* https://www.openidentityplatform.org/opendj[OpenDJ] footnote:opendj-version[OpenDJ image: https://hub.docker.com/r/openidentityplatform/opendj[openidentityplatform/opendj]:4.6.2] (LDAP server)
+* Sandbox application for testing
+
+== Customizations
+
+=== Runtime versions/tags
+
+Most of the components are deployed using Helm charts with custom parameters.
+
+Helm chart versions are not defined (so the latest versions are used), but deployments may require setting custom version numbers to run the latest/updated/custom images. The following list collects such customizations.
+
+* *k8s/cluster/kind/kind.yaml*
+** `nodes[*].image`: Kind "node" image footnote:kind-version[]
+* *k8s/config/metallb-config.yaml*
+** `controller.image.tag`: MetalLB controller footnote:metallb-version[]
+** `speaker.image.tag`: MetalLB speaker footnote:metallb-version[]
+** `frr.image.tag`: MetalLB FRR footnote:metallb-version[]
+* *k8s/config/kube-stack-config.yaml*
+** `prometheus.prometheusSpec.image.tag`: Prometheus footnote:prometheus-version[]
+** `grafana.image.tag`: Grafana footnote:grafana-version[]
+** `alertmanager.alertmanagerSpec.image.tag`: AlertManager footnote:alertmanager-version[]
+** `thanosRuler.thanosRulerSpec.image.tag`: Thanos footnote:thanos-version[]
+* *k8s/infra/001-kafka.yaml*
+** `spec.kafka.version`: Kafka footnote:kafka-version[]
+* *k8s/infra/002-postgresql.yaml*
+** `spec.imageName`: PostgreSQL footnote:postgresql-version[]
+* *k8s/infra/011-artemis.yaml*
+** `spec.deploymentPlan.image`: ActiveMQ Artemis footnote:activemq-artemis-version[]
+** `spec.deploymentPlan.initImage`: ActiveMQ Artemis (init image) footnote:activemq-artemis-version[]
+* *k8s/infra/012-debezium.yaml*
+** `spec.image`: Debezium footnote:debezium-version[]
+** `spec.template.spec.containers.0.image`: Debezium UI footnote:debezium-ui-version[]
+
+
+=== Custom images
+
+A custom PostgreSQL image is used because the official image (including Timescale/PostGIS prepared versions) doesn't include the necessary locale settings for collation. The preferred method for setting these is described in https://hub.docker.com/_/postgres[Locale Customization].
+
+The official Kafka image doesn't include required Java libraries like the https://debezium.io/documentation/reference/stable/connectors/postgresql.html[Debezium PostgreSQL connector]. Therefore, it's necessary to add them to a custom image.
+
+Custom images are pushed to local registry created for the Kubernetes cluster, so no need to use external registry services.
+
+////
+TODO:
+* kind-nginx image + customization / Helm?
+
+https://quay.io/repository/strimzi/kafka:0.40.0-kafka-3.7.0
+ -e KAFKA_CONNECT_PLUGINS_DIR=/kafka/connect/,/path/to/further/plugins
+
+Skaffold/DevSpace?
+
+container images (defined by operator/helm)
+- ghcr.io/cloudnative-pg/cloudnative-pg:1.22.2
+- quay.io/strimzi/operator:0.40.0
+- quay.io/artemiscloud/activemq-artemis-operator:1.2.0
+- ghcr.io/stakater/reloader:v1.0.72
+- docker.io/bitnami/sealed-secrets-controller:0.26.1
+
+////

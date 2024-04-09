@@ -1,0 +1,17 @@
+prometheus:
+  metricsServer:
+    enabled: true
+    podMonitor:
+      enabled: true
+    serviceMonitor:
+      enabled: true
+  operator:
+    enabled: true
+    podMonitor:
+      enabled: true
+    serviceMonitor:
+      enabled: true
+  webhooks:
+    enabled: true
+    serviceMonitor:
+      enabled: true

@@ -1,0 +1,46 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: istio-ingress
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: local-gateway
+  namespace: istio-ingress
+spec:
+  gatewayClassName: istio
+  listeners:
+  - name: default
+    hostname: "*.local"
+    port: 80
+    protocol: HTTP
+    allowedRoutes:
+      kinds:
+      - kind: HTTPRoute
+      namespaces:
+        from: Selector
+        selector:
+          matchLabels:
+            expose-apps: 'true'
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: sandbox-gateway
+  namespace: istio-ingress
+spec:
+  gatewayClassName: istio
+  listeners:
+  - name: default
+    hostname: "*.sandbox"
+    port: 80
+    protocol: HTTP
+    allowedRoutes:
+      kinds:
+      - kind: HTTPRoute
+      namespaces:
+        from: Selector
+        selector:
+          matchLabels:
+            sandbox-apps: 'true'

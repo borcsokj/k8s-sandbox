@@ -1,0 +1,205 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: opendj
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: opendj-secrets
+  namespace: opendj
+type: Opaque
+data:
+  dn: 'Y249RGlyZWN0b3J5IE1hbmFnZXI=' # cn=Directory Manager
+  password: 'd2VsY29tZTE='           # welcome1
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: artemis-import
+  namespace: opendj
+data:
+  init.ldif: |
+    dn: dc=borcsokj,dc=github,dc=io
+    dc: borcsokj
+    objectClass: top
+    objectClass: domain
+
+    dn: dc=users,dc=borcsokj,dc=github,dc=io
+    dc: users
+    objectClass: top
+    objectClass: domain
+
+    dn: dc=operators,dc=borcsokj,dc=github,dc=io
+    dc: operators
+    objectClass: top
+    objectClass: domain
+
+    dn: uid=user1,dc=users,dc=borcsokj,dc=github,dc=io
+    uid: user1
+    userPassword: password1
+    objectClass: account
+    objectClass: simpleSecurityObject
+    objectClass: top
+
+    dn: uid=user2,dc=users,dc=borcsokj,dc=github,dc=io
+    uid: user2
+    userPassword: password2
+    objectClass: account
+    objectClass: simpleSecurityObject
+    objectClass: top
+
+    dn: uid=reporter,dc=operators,dc=borcsokj,dc=github,dc=io
+    uid: reporter
+    userPassword: reporter
+    objectClass: account
+    objectClass: simpleSecurityObject
+    objectClass: top
+
+    dn: uid=admin,dc=operators,dc=borcsokj,dc=github,dc=io
+    uid: admin
+    userPassword: admin
+    objectClass: account
+    objectClass: simpleSecurityObject
+    objectClass: top
+
+    dn: dc=groups,dc=borcsokj,dc=github,dc=io
+    dc: groups
+    objectClass: domain
+    objectClass: top
+
+    dn: cn=user,dc=groups,dc=borcsokj,dc=github,dc=io
+    cn: user
+    member: uid=user1,dc=users,dc=borcsokj,dc=github,dc=io
+    member: uid=user2,dc=users,dc=borcsokj,dc=github,dc=io
+    member: uid=reporter,dc=operators,dc=borcsokj,dc=github,dc=io
+    member: uid=admin,dc=operators,dc=borcsokj,dc=github,dc=io
+    objectClass: groupOfNames
+    objectClass: top
+
+    dn: cn=GROUP1,dc=groups,dc=borcsokj,dc=github,dc=io
+    cn: GROUP1
+    member: uid=user1,dc=users,dc=borcsokj,dc=github,dc=io
+    objectClass: groupOfNames
+    objectClass: top
+
+    dn: cn=GROUP2,dc=groups,dc=borcsokj,dc=github,dc=io
+    cn: GROUP2
+    member: uid=user2,dc=users,dc=borcsokj,dc=github,dc=io
+    objectClass: groupOfNames
+    objectClass: top
+
+    dn: cn=REPORTER,dc=groups,dc=borcsokj,dc=github,dc=io
+    cn: REPORTER
+    member: uid=reporter,dc=operators,dc=borcsokj,dc=github,dc=io
+    member: uid=reporter,dc=operators,dc=borcsokj,dc=github,dc=io
+    objectClass: groupOfNames
+    objectClass: top
+
+    dn: cn=ADMIN,dc=groups,dc=borcsokj,dc=github,dc=io
+    cn: ADMIN
+    member: uid=admin,dc=operators,dc=borcsokj,dc=github,dc=io
+    objectClass: groupOfNames
+    objectClass: top
+  init.sh: |
+    #!/bin/bash
+    while [ $(/opt/opendj/bin/status --connectTimeout 0 --bindDN "${ROOT_USER_DN}" --bindPassword "${ROOT_PASSWORD}" -X -s | grep "Server Run Status: Started" | wc -l) -ne 1 ];
+    do
+      echo "  Waiting for OpenDJ to start..." ; sleep 1;
+    done
+    /opt/opendj/bin/import-ldif -b "dc=borcsokj,dc=github,dc=io" --bindDN "${ROOT_USER_DN}" --bindPassword "${ROOT_PASSWORD}" -l /opt/opendj/artemis-import/init.ldif
+---
+apiVersion: v1
+kind: Service
+metadata:
+  labels:
+    app: opendj
+  name: opendj-service
+  namespace: opendj
+spec:
+  clusterIP: None
+  ports:
+  - port: 1389
+    name: ldap
+  - port: 1636
+    name: ldaps
+  - port: 4444
+    name: admin
+  selector:
+    app: opendj
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: opendj
+  namespace: opendj
+  labels:
+    app: opendj
+spec:
+  serviceName: opendj
+  replicas: 1
+  selector:
+    matchLabels:
+      app: opendj
+  template:
+    metadata:
+      labels:
+        app: opendj
+    spec:
+      containers:
+      - name: opendj
+        image: openidentityplatform/opendj:4.6.2
+        imagePullPolicy: IfNotPresent
+        ports:
+        - containerPort: 1389
+          protocol: TCP
+        - containerPort: 1636
+          protocol: TCP
+        - containerPort: 4444
+          protocol: TCP
+        env:
+          - name: BASE_DN
+            value: dc=borcsokj,dc=github,dc=io
+          - name: ROOT_USER_DN
+            valueFrom:
+              secretKeyRef:
+                name: opendj-secrets
+                key: dn
+                optional: true
+          - name: ROOT_PASSWORD
+            valueFrom:
+              secretKeyRef:
+                name: opendj-secrets
+                key: password
+                optional: true
+        resources: {}
+        terminationMessagePath: /dev/termination-log
+        terminationMessagePolicy: File
+        volumeMounts:
+        - name: opendj-data
+          mountPath: /opt/opendj/data
+        - name: artemis-import
+          mountPath: /opt/opendj/artemis-import
+          readOnly: true
+        lifecycle:
+          postStart:
+            exec:
+              command: ["/opt/opendj/artemis-import/init.sh"]
+      volumes:
+        - name: artemis-import
+          configMap:
+            name: artemis-import
+            items:
+              - key: 'init.ldif'
+                path: 'init.ldif'
+              - key: 'init.sh'
+                path: 'init.sh'
+                mode: 0755
+  volumeClaimTemplates:
+  - metadata:
+      name: opendj-data
+    spec:
+      accessModes: [ "ReadWriteOnce" ]
+      resources:
+        requests:
+          storage: 200Mi

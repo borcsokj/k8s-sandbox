@@ -1,0 +1,344 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: kafka
+---
+apiVersion: kafka.strimzi.io/v1beta2
+kind: KafkaNodePool
+metadata:
+  name: dual-role
+  namespace: kafka
+  labels:
+    strimzi.io/cluster: my-cluster
+spec:
+  replicas: 3
+  roles:
+    - controller
+    - broker
+  storage:
+    type: jbod
+    volumes:
+      - id: 0
+        type: persistent-claim
+        size: 20Gi
+        deleteClaim: false
+  template:
+    pod:
+      affinity:
+        podAntiAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            - labelSelector:
+                matchExpressions:
+                  - key: strimzi.io/name
+                    operator: In
+                    values:
+                      - my-cluster-kafka
+              topologyKey: "kubernetes.io/hostname"
+---
+apiVersion: kafka.strimzi.io/v1beta2
+kind: Kafka
+metadata:
+  name: my-cluster
+  namespace: kafka
+  annotations:
+    strimzi.io/node-pools: enabled
+    strimzi.io/kraft: enabled
+spec:
+  kafka:
+    config:
+      offsets.topic.replication.factor: 3
+      transaction.state.log.replication.factor: 3
+      transaction.state.log.min.isr: 2
+      default.replication.factor: 3
+      min.insync.replicas: 2
+      inter.broker.protocol.version: '3.7'
+    storage:  # required by CRD but ignored by Strimzi operator
+      type: persistent-claim
+      size: 5Gi
+      deleteClaim: true
+    listeners:
+      - name: plain
+        port: 9092
+        type: internal
+        tls: false
+      - name: tls
+        port: 9093
+        type: internal
+        tls: true
+    version: 3.7.0
+    replicas: 3
+    metricsConfig:
+      type: jmxPrometheusExporter
+      valueFrom:
+        configMapKeyRef:
+          name: kafka-metrics
+          key: kafka-metrics-config.yml
+  entityOperator:
+    topicOperator: {}
+    userOperator: {}
+  cruiseControl: {} # (4)
+  zookeeper: # required by CRD but ignored by Strimzi operator
+    storage:
+      type: persistent-claim
+      deleteClaim: true
+      size: 2Gi
+    replicas: 3
+---
+kind: ConfigMap
+apiVersion: v1
+metadata:
+  name: kafka-metrics
+  namespace: kafka
+  labels:
+    app: strimzi
+data:
+  kafka-metrics-config.yml: |
+    lowercaseOutputName: true
+    rules:
+    - pattern: kafka.server<type=(.+), name=(.+), clientId=(.+), topic=(.+), partition=(.*)><>Value
+      name: kafka_server_$1_$2
+      type: GAUGE
+      labels:
+        clientId: "$3"
+        topic: "$4"
+        partition: "$5"
+    - pattern: kafka.server<type=(.+), name=(.+), clientId=(.+), brokerHost=(.+), brokerPort=(.+)><>Value
+      name: kafka_server_$1_$2
+      type: GAUGE
+      labels:
+        clientId: "$3"
+        broker: "$4:$5"
+    - pattern: kafka.server<type=(.+), cipher=(.+), protocol=(.+), listener=(.+), networkProcessor=(.+)><>connections
+      name: kafka_server_$1_connections_tls_info
+      type: GAUGE
+      labels:
+        cipher: "$2"
+        protocol: "$3"
+        listener: "$4"
+        networkProcessor: "$5"
+    - pattern: kafka.server<type=(.+), clientSoftwareName=(.+), clientSoftwareVersion=(.+), listener=(.+), networkProcessor=(.+)><>connections
+      name: kafka_server_$1_connections_software
+      type: GAUGE
+      labels:
+        clientSoftwareName: "$2"
+        clientSoftwareVersion: "$3"
+        listener: "$4"
+        networkProcessor: "$5"
+    - pattern: "kafka.server<type=(.+), listener=(.+), networkProcessor=(.+)><>(.+):"
+      name: kafka_server_$1_$4
+      type: GAUGE
+      labels:
+        listener: "$2"
+        networkProcessor: "$3"
+    - pattern: kafka.server<type=(.+), listener=(.+), networkProcessor=(.+)><>(.+)
+      name: kafka_server_$1_$4
+      type: GAUGE
+      labels:
+        listener: "$2"
+        networkProcessor: "$3"
+    - pattern: kafka.(\w+)<type=(.+), name=(.+)Percent\w*><>MeanRate
+      name: kafka_$1_$2_$3_percent
+      type: GAUGE
+    - pattern: kafka.(\w+)<type=(.+), name=(.+)Percent\w*><>Value
+      name: kafka_$1_$2_$3_percent
+      type: GAUGE
+    - pattern: kafka.(\w+)<type=(.+), name=(.+)Percent\w*, (.+)=(.+)><>Value
+      name: kafka_$1_$2_$3_percent
+      type: GAUGE
+      labels:
+        "$4": "$5"
+    - pattern: kafka.(\w+)<type=(.+), name=(.+)PerSec\w*, (.+)=(.+), (.+)=(.+)><>Count
+      name: kafka_$1_$2_$3_total
+      type: COUNTER
+      labels:
+        "$4": "$5"
+        "$6": "$7"
+    - pattern: kafka.(\w+)<type=(.+), name=(.+)PerSec\w*, (.+)=(.+)><>Count
+      name: kafka_$1_$2_$3_total
+      type: COUNTER
+      labels:
+        "$4": "$5"
+    - pattern: kafka.(\w+)<type=(.+), name=(.+)PerSec\w*><>Count
+      name: kafka_$1_$2_$3_total
+      type: COUNTER
+    - pattern: kafka.(\w+)<type=(.+), name=(.+), (.+)=(.+), (.+)=(.+)><>Value
+      name: kafka_$1_$2_$3
+      type: GAUGE
+      labels:
+        "$4": "$5"
+        "$6": "$7"
+    - pattern: kafka.(\w+)<type=(.+), name=(.+), (.+)=(.+)><>Value
+      name: kafka_$1_$2_$3
+      type: GAUGE
+      labels:
+        "$4": "$5"
+    - pattern: kafka.(\w+)<type=(.+), name=(.+)><>Value
+      name: kafka_$1_$2_$3
+      type: GAUGE
+    - pattern: kafka.(\w+)<type=(.+), name=(.+), (.+)=(.+), (.+)=(.+)><>Count
+      name: kafka_$1_$2_$3_count
+      type: COUNTER
+      labels:
+        "$4": "$5"
+        "$6": "$7"
+    - pattern: kafka.(\w+)<type=(.+), name=(.+), (.+)=(.*), (.+)=(.+)><>(\d+)thPercentile
+      name: kafka_$1_$2_$3
+      type: GAUGE
+      labels:
+        "$4": "$5"
+        "$6": "$7"
+        quantile: "0.$8"
+    - pattern: kafka.(\w+)<type=(.+), name=(.+), (.+)=(.+)><>Count
+      name: kafka_$1_$2_$3_count
+      type: COUNTER
+      labels:
+        "$4": "$5"
+    - pattern: kafka.(\w+)<type=(.+), name=(.+), (.+)=(.*)><>(\d+)thPercentile
+      name: kafka_$1_$2_$3
+      type: GAUGE
+      labels:
+        "$4": "$5"
+        quantile: "0.$6"
+    - pattern: kafka.(\w+)<type=(.+), name=(.+)><>Count
+      name: kafka_$1_$2_$3_count
+      type: COUNTER
+    - pattern: kafka.(\w+)<type=(.+), name=(.+)><>(\d+)thPercentile
+      name: kafka_$1_$2_$3
+      type: GAUGE
+      labels:
+        quantile: "0.$4"
+    - pattern: "kafka.server<type=raft-metrics><>(.+-total|.+-max):"
+      name: kafka_server_raftmetrics_$1
+      type: COUNTER
+    - pattern: "kafka.server<type=raft-metrics><>(.+):"
+      name: kafka_server_raftmetrics_$1
+      type: GAUGE
+    - pattern: "kafka.server<type=raft-channel-metrics><>(.+-total|.+-max):"
+      name: kafka_server_raftchannelmetrics_$1
+      type: COUNTER
+    - pattern: "kafka.server<type=raft-channel-metrics><>(.+):"
+      name: kafka_server_raftchannelmetrics_$1
+      type: GAUGE
+    - pattern: "kafka.server<type=broker-metadata-metrics><>(.+):"
+      name: kafka_server_brokermetadatametrics_$1
+      type: GAUGE
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: kafka-ui-deployment
+  labels:
+    app: kafka-ui
+  namespace: kafka
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: kafka-ui
+  template:
+    metadata:
+      labels:
+        app: kafka-ui
+    spec:
+      containers:
+      - name: kafka-ui
+        image: provectuslabs/kafka-ui:v0.7.1
+        env:
+        - name: KAFKA_CLUSTERS_0_NAME
+          value: "K8 Kafka Cluster"
+        - name: KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS
+          value: my-cluster-kafka-brokers:9092
+        imagePullPolicy: Always
+        resources:
+          requests:
+            memory: "256Mi"
+            cpu: "100m"
+          limits:
+            memory: "1024Mi"
+            cpu: "1000m"
+        ports:
+        - containerPort: 8080
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: kafka-ui
+  namespace: kafka
+spec:
+  ports:
+  - name: http-web
+    port: 80
+    protocol: TCP
+    targetPort: 8080
+  selector:
+    app: kafka-ui
+  type: ClusterIP
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: kafka-ui-ing
+  namespace: kafka
+spec:
+  ingressClassName: nginx
+  rules:
+  - host: "kafka-ui.local"
+    http:
+      paths:
+      - backend:
+          service:
+            name: kafka-ui
+            port:
+              name: http-web
+        path: /
+        pathType: Prefix
+---
+apiVersion: monitoring.coreos.com/v1
+kind: PodMonitor
+metadata:
+  name: kafka-resources-metrics
+  namespace: kafka
+  labels:
+    app: strimzi
+    release: kube-prometheus-stack
+spec:
+  selector:
+    matchExpressions:
+      - key: "strimzi.io/kind"
+        operator: In
+        values: ["Kafka", "KafkaConnect", "KafkaMirrorMaker", "KafkaMirrorMaker2"]
+  namespaceSelector:
+    matchNames:
+      - kafka
+  podMetricsEndpoints:
+  - path: /metrics
+    port: tcp-prometheus
+    relabelings:
+    - separator: ;
+      regex: __meta_kubernetes_pod_label_(strimzi_io_.+)
+      replacement: $1
+      action: labelmap
+    - sourceLabels: [__meta_kubernetes_namespace]
+      separator: ;
+      regex: (.*)
+      targetLabel: namespace
+      replacement: $1
+      action: replace
+    - sourceLabels: [__meta_kubernetes_pod_name]
+      separator: ;
+      regex: (.*)
+      targetLabel: kubernetes_pod_name
+      replacement: $1
+      action: replace
+    - sourceLabels: [__meta_kubernetes_pod_node_name]
+      separator: ;
+      regex: (.*)
+      targetLabel: node_name
+      replacement: $1
+      action: replace
+    - sourceLabels: [__meta_kubernetes_pod_host_ip]
+      separator: ;
+      regex: (.*)
+      targetLabel: node_ip
+      replacement: $1
+      action: replace

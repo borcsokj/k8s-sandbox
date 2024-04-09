@@ -1,0 +1,119 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: databases
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: pg-postgres-secret
+  namespace: databases
+data:
+  username: 'cG9zdGdyZXM=' # postgres
+  password: 'd2VsY29tZTE=' # welcome1
+type: kubernetes.io/basic-auth
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: pg-sandbox-secret
+  namespace: databases
+data:
+  username: 'c2FuZGJveA==' # sandbox
+  password: 'Y2hhbmdlaXQ=' # changeit
+type: kubernetes.io/basic-auth
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: pg-sandbox-init-scripts
+  namespace: databases
+data:
+  init-sandbox-db: |-
+    CREATE EXTENSION IF NOT EXISTS "timescaledb";
+    CREATE EXTENSION IF NOT EXISTS "postgis";
+    CREATE EXTENSION IF NOT EXISTS "postgis_topology";
+    CREATE EXTENSION IF NOT EXISTS "fuzzystrmatch";
+    CREATE EXTENSION IF NOT EXISTS "postgis_tiger_geocoder";
+    CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
+    CREATE SCHEMA IF NOT EXISTS shadow AUTHORIZATION sandbox;
+
+    CREATE SCHEMA IF NOT EXISTS debezium;
+    CREATE TABLE IF NOT EXISTS "debezium"."heartbeat" (
+        "slot" VARCHAR(64) NOT NULL PRIMARY KEY,
+        "last_heartbeat_ts" TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP
+    );
+
+    DELETE FROM "debezium"."heartbeat";
+    INSERT INTO "debezium"."heartbeat" ("slot", "last_heartbeat_ts") VALUES ('debezium', CURRENT_TIMESTAMP);
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: pg-sandbox-custom-metrics
+  namespace: databases
+  labels:
+    cnpg.io/reload: ""
+data:
+  custom-queries: |
+    replication_slots:
+      query: |
+        SELECT slot_name,
+          pg_wal_lsn_diff(pg_current_wal_lsn(), restart_lsn) AS retained_wal,
+          CASE WHEN active THEN 1 ELSE 0 END AS active,
+          restart_lsn - '0/0' AS restart_lsn,
+          CASE WHEN wal_status = 'reserved' THEN 1 WHEN wal_status = 'extended' THEN 2 WHEN wal_status = 'unreserved' THEN 3 WHEN wal_status = 'lost' THEN 4 END AS wal_status
+        FROM pg_replication_slots;
+      metrics:
+        - slot_name:
+            usage: 'LABEL'
+            description: 'Name of replication slot'
+        - retained_wal:
+            usage: 'GAUGE'
+            description: 'Retained WAL size'
+        - active:
+            usage: 'GAUGE'
+            description: 'Whether the replication slot is active'
+        - restart_lsn:
+            usage: 'COUNTER'
+            description: 'Restart LSN'
+        - wal_status:
+            usage: 'GAUGE'
+            description: 'WAL status (1=reserved, 2=extended, 3=unreserved, 4=lost)'
+      target_databases:
+        - 'template1'
+---
+apiVersion: postgresql.cnpg.io/v1
+kind: Cluster
+metadata:
+  name: pg-sandbox
+  namespace: databases
+spec:
+  instances: 1
+  primaryUpdateStrategy: unsupervised
+  imageName: localhost:5001/timescaledb-postgis:16
+  superuserSecret:
+    name: pg-postgres-secret
+  enableSuperuserAccess: true
+  bootstrap:
+    initdb:
+      database: sandbox
+      owner: sandbox
+      secret:
+        name: pg-sandbox-secret
+      # localeCollate: hu_HU
+      # localeCType: hu_HU
+      postInitApplicationSQLRefs:
+        configMapRefs:
+          - name: pg-sandbox-init-scripts
+            key: init-sandbox-db
+  postgresql:
+    shared_preload_libraries:
+      - timescaledb
+  storage:
+    size: 1Gi
+  monitoring:
+    enablePodMonitor: true
+    customQueriesConfigMap:
+      - name: pg-sandbox-custom-metrics
+        key: custom-queries

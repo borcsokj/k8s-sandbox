@@ -1,0 +1,382 @@
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: connector-configuration-role
+  namespace: databases
+rules:
+  - apiGroups: [""]
+    resources: ["secrets"]
+    resourceNames: ["pg-postgres-secret"]
+    verbs: ["get"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: connector-configuration-role-binding
+  namespace: databases
+subjects:
+  - kind: ServiceAccount
+    name: debezium-connect-cluster-connect
+    namespace: kafka
+roleRef:
+  kind: Role
+  name: connector-configuration-role
+  apiGroup: rbac.authorization.k8s.io
+---
+apiVersion: kafka.strimzi.io/v1beta2
+kind: KafkaTopic
+metadata:
+  name: connect-cluster-configs
+  namespace: kafka
+  labels:
+    strimzi.io/cluster: kafka
+spec:
+  partitions: 1
+  replicas: 3
+  config:
+    cleanup.policy: compact
+---
+kind: ConfigMap
+apiVersion: v1
+metadata:
+  name: connect-metrics
+  namespace: kafka
+  labels:
+    app: strimzi
+data:
+  metrics-config.yml: |
+    # Inspired by kafka-connect rules
+    # https://github.com/prometheus/jmx_exporter/blob/master/example_configs/kafka-connect.yml
+    # See https://github.com/prometheus/jmx_exporter for more info about JMX Prometheus Exporter metrics
+    lowercaseOutputName: true
+    lowercaseOutputLabelNames: true
+    rules:
+    #kafka.connect:type=app-info,client-id="{clientid}"
+    #kafka.consumer:type=app-info,client-id="{clientid}"
+    #kafka.producer:type=app-info,client-id="{clientid}"
+    - pattern: 'kafka.(.+)<type=app-info, client-id=(.+)><>start-time-ms'
+      name: kafka_$1_start_time_seconds
+      labels:
+        clientId: "$2"
+      help: "Kafka $1 JMX metric start time seconds"
+      type: GAUGE
+      valueFactor: 0.001
+    - pattern: 'kafka.(.+)<type=app-info, client-id=(.+)><>(commit-id|version): (.+)'
+      name: kafka_$1_$3_info
+      value: 1
+      labels:
+        clientId: "$2"
+        $3: "$4"
+      help: "Kafka $1 JMX metric info version and commit-id"
+      type: GAUGE
+
+    #kafka.consumer:type=consumer-fetch-manager-metrics,client-id="{clientid}",topic="{topic}"", partition="{partition}"
+    - pattern: kafka.consumer<type=consumer-fetch-manager-metrics, client-id=(.+), topic=(.+), partition=(.+)><>(.+-total|compression-rate|.+-avg|.+-replica|.+-lag|.+-lead)
+      name: kafka_consumer_fetch_manager_$4
+      labels:
+        clientId: "$1"
+        topic: "$2"
+        partition: "$3"
+      help: "Kafka Consumer JMX metric type consumer-fetch-manager-metrics"
+      type: GAUGE
+
+    #kafka.producer:type=producer-topic-metrics,client-id="{clientid}",topic="{topic}"
+    - pattern: kafka.producer<type=producer-topic-metrics, client-id=(.+), topic=(.+)><>(.+-total|compression-rate|.+-avg|.+rate)
+      name: kafka_producer_topic_$3
+      labels:
+        clientId: "$1"
+        topic: "$2"
+      help: "Kafka Producer JMX metric type producer-topic-metrics"
+      type: GAUGE
+
+    #kafka.connect:type=connect-node-metrics,client-id="{clientid}",node-id="{nodeid}"
+    #kafka.consumer:type=consumer-node-metrics,client-id=consumer-1,node-id="{nodeid}"
+    - pattern: kafka.(.+)<type=(.+)-metrics, client-id=(.+), node-id=(.+)><>(.+-total|.+-avg|.+-rate)
+      name: kafka_$2_$5
+      labels:
+        clientId: "$3"
+        nodeId: "$4"
+      help: "Kafka $1 JMX metric type $2"
+      type: GAUGE
+
+    #kafka.connect:type=kafka-metrics-count,client-id="{clientid}"
+    #kafka.consumer:type=consumer-fetch-manager-metrics,client-id="{clientid}"
+    #kafka.consumer:type=consumer-coordinator-metrics,client-id="{clientid}"
+    #kafka.consumer:type=consumer-metrics,client-id="{clientid}"
+    - pattern: kafka.(.+)<type=(.+)-metrics, client-id=(.*)><>(.+-total|.+-avg|.+-bytes|.+-count|.+-ratio|.+-age|.+-flight|.+-threads|.+-connectors|.+-tasks|.+-ago)
+      name: kafka_$2_$4
+      labels:
+        clientId: "$3"
+      help: "Kafka $1 JMX metric type $2"
+      type: GAUGE
+
+    #kafka.connect:type=connector-metrics,connector="{connector}"
+    - pattern: 'kafka.connect<type=connector-metrics, connector=(.+)><>(connector-class|connector-type|connector-version|status): (.+)'
+      name: kafka_connect_connector_$2
+      value: 1
+      labels:
+        connector: "$1"
+        $2: "$3"
+      help: "Kafka Connect $2 JMX metric type connector"
+      type: GAUGE
+
+    #kafka.connect:type=connector-task-metrics,connector="{connector}",task="{task}<> status"
+    - pattern: 'kafka.connect<type=connector-task-metrics, connector=(.+), task=(.+)><>status: ([a-z-]+)'
+      name: kafka_connect_connector_task_status
+      value: 1
+      labels:
+        connector: "$1"
+        task: "$2"
+        status: "$3"
+      help: "Kafka Connect JMX Connector task status"
+      type: GAUGE
+
+    #kafka.connect:type=task-error-metrics,connector="{connector}",task="{task}"
+    #kafka.connect:type=source-task-metrics,connector="{connector}",task="{task}"
+    #kafka.connect:type=sink-task-metrics,connector="{connector}",task="{task}"
+    #kafka.connect:type=connector-task-metrics,connector="{connector}",task="{task}"
+    - pattern: kafka.connect<type=(.+)-metrics, connector=(.+), task=(.+)><>(.+-total|.+-count|.+-ms|.+-ratio|.+-seq-no|.+-rate|.+-max|.+-avg|.+-failures|.+-requests|.+-timestamp|.+-logged|.+-errors|.+-retries|.+-skipped)
+      name: kafka_connect_$1_$4
+      labels:
+        connector: "$2"
+        task: "$3"
+      help: "Kafka Connect JMX metric type $1"
+      type: GAUGE
+
+    #kafka.connect:type=connect-worker-metrics,connector="{connector}"
+    - pattern: kafka.connect<type=connect-worker-metrics, connector=(.+)><>([a-z-]+)
+      name: kafka_connect_worker_$2
+      labels:
+        connector: "$1"
+      help: "Kafka Connect JMX metric $1"
+      type: GAUGE
+
+    #kafka.connect:type=connect-worker-metrics
+    - pattern: kafka.connect<type=connect-worker-metrics><>([a-z-]+)
+      name: kafka_connect_worker_$1
+      help: "Kafka Connect JMX metric worker"
+      type: GAUGE
+
+    #kafka.connect:type=connect-worker-rebalance-metrics,leader-name|connect-protocol
+    - pattern: 'kafka.connect<type=connect-worker-rebalance-metrics><>(leader-name|connect-protocol): (.+)'
+      name: kafka_connect_worker_rebalance_$1
+      value: 1
+      labels:
+          $1: "$2"
+      help: "Kafka Connect $2 JMX metric type worker rebalance"
+      type: UNTYPED
+
+    #kafka.connect:type=connect-worker-rebalance-metrics
+    - pattern: kafka.connect<type=connect-worker-rebalance-metrics><>([a-z-]+)
+      name: kafka_connect_worker_rebalance_$1
+      help: "Kafka Connect JMX metric rebalance information"
+      type: GAUGE
+
+    #kafka.connect:type=connect-coordinator-metrics
+    - pattern: kafka.connect<type=connect-coordinator-metrics><>(assigned-connectors|assigned-tasks)
+      name: kafka_connect_coordinator_$1
+      help: "Kafka Connect JMX metric assignment information"
+      type: GAUGE
+---
+apiVersion: kafka.strimzi.io/v1beta2
+kind: KafkaConnect
+metadata:
+  name: debezium-connect-cluster
+  namespace: kafka
+  annotations:
+    strimzi.io/use-connector-resources: "true"
+spec:
+  version: 3.7.0
+  replicas: 1
+  bootstrapServers: my-cluster-kafka-bootstrap:9092
+  image: localhost:5001/debezium-connect:0.40.0
+  metricsConfig:
+    type: jmxPrometheusExporter
+    valueFrom:
+      configMapKeyRef:
+        name: connect-metrics
+        key: metrics-config.yml
+  config:
+    config.providers: secrets
+    config.providers.secrets.class: io.strimzi.kafka.KubernetesSecretConfigProvider
+    group.id: connect-cluster
+    offset.storage.topic: connect-cluster-offsets
+    config.storage.topic: connect-cluster-configs
+    status.storage.topic: connect-cluster-status
+    # -1 means it will use the default replication factor configured in the broker
+    config.storage.replication.factor: -1
+    offset.storage.replication.factor: -1
+    status.storage.replication.factor: -1
+    topic.creation.default.cleanup.policy: compact
+    topic.creation.default.compression.type: lz4
+    topic.creation.inventory.cleanup.policy: compact
+    topic.creation.inventory.delete.retention.ms: 2592000000
+    max.request.size: 5182160
+    producer.max.request.size: 5182160
+  # build:
+  #   output:
+  #     type: docker
+  #     image: 'registry:5000/debezium-connect:latest'
+  #   plugins:
+  #     - name: debezium-connector-postgres
+  #       artifacts:
+  #         - type: maven
+  #           group: io.debezium
+  #           artifact: debezium-connector-postgres
+  #           version: 2.5.4.Final-plugin
+  #           # type: tgz
+  #           # url: https://repo1.maven.org/maven2/io/debezium/debezium-connector-postgres/2.5.4.Final/debezium-connector-postgres-2.5.4.Final-plugin.tar.gz
+  #     - name: debezium-connector-mongodb
+  #       artifacts:
+  #         - type: maven
+  #           group: io.debezium
+  #           artifact: debezium-connector-mongodb
+  #           version: 2.5.4.Final-plugin
+  #           # type: tgz
+  #           # url: https://repo1.maven.org/maven2/io/debezium/debezium-connector-mongodb/2.5.4.Final/debezium-connector-mongodb-2.5.4.Final-plugin.tar.gz
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: debezium-ui-deployment
+  labels:
+    app: debezium-ui
+  namespace: kafka
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: debezium-ui
+  template:
+    metadata:
+      labels:
+        app: debezium-ui
+    spec:
+      containers:
+      - name: debezium-ui
+        image: debezium/debezium-ui:2.5
+        env:
+        - name: KAFKA_CONNECT_URIS
+          value: http://debezium-connect-cluster-connect-api:8083
+        imagePullPolicy: Always
+        resources:
+          requests:
+            memory: "256Mi"
+            cpu: "100m"
+          limits:
+            memory: "1024Mi"
+            cpu: "1000m"
+        ports:
+        - containerPort: 8080
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: debezium-ui
+  namespace: kafka
+spec:
+  ports:
+  - name: http-web
+    port: 80
+    protocol: TCP
+    targetPort: 8080
+  selector:
+    app: debezium-ui
+  type: ClusterIP
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: debezium-ui-ing
+  namespace: kafka
+spec:
+  ingressClassName: nginx
+  rules:
+  - host: "debezium-ui.local"
+    http:
+      paths:
+      - backend:
+          service:
+            name: debezium-ui
+            port:
+              name: http-web
+        path: /
+        pathType: Prefix
+---
+apiVersion: monitoring.coreos.com/v1
+kind: PodMonitor
+metadata:
+  name: kafka-resources-metrics
+  labels:
+    app: strimzi
+  namespace: kafka
+spec:
+  selector:
+    matchExpressions:
+      - key: "strimzi.io/kind"
+        operator: In
+        values: ["Kafka", "KafkaConnect", "KafkaMirrorMaker", "KafkaMirrorMaker2"]
+  namespaceSelector:
+    matchNames:
+      - kafka
+  podMetricsEndpoints:
+    - path: /metrics
+      port: tcp-prometheus
+      relabelings:
+        - separator: ;
+          regex: __meta_kubernetes_pod_label_(strimzi_io_.+)
+          replacement: $1
+          action: labelmap
+        - sourceLabels: [__meta_kubernetes_namespace]
+          separator: ;
+          regex: (.*)
+          targetLabel: namespace
+          replacement: $1
+          action: replace
+        - sourceLabels: [__meta_kubernetes_pod_name]
+          separator: ;
+          regex: (.*)
+          targetLabel: kubernetes_pod_name
+          replacement: $1
+          action: replace
+        - sourceLabels: [__meta_kubernetes_pod_node_name]
+          separator: ;
+          regex: (.*)
+          targetLabel: node_name
+          replacement: $1
+          action: replace
+        - sourceLabels: [__meta_kubernetes_pod_host_ip]
+          separator: ;
+          regex: (.*)
+          targetLabel: node_ip
+          replacement: $1
+          action: replace
+---
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  labels:
+    role: alert-rules
+    app: strimzi
+  name: kafka-resources-alerts
+  namespace: kafka
+spec:
+  groups:
+    - name: kafka_connect_rules
+      rules:
+        - alert: KafkaConnectConnectorNotRunning
+          expr: kafka_connect_connector_status{status!="running"} == 1
+          for: 5m
+          labels:
+            severity: critical
+          annotations:
+            summary: "Kafka Connect connector {{ $labels.connector }} is not in running status"
+            description: "Kafka Connect connector {{ $labels.connector }} is detected to be not in running status for more than 5 minutes, which may indicate a problem."
+        - alert: KafkaConnectConnectorTaskFailed
+          expr: kafka_connect_connector_task_status{status!="running"} == 1
+          for: 5m
+          labels:
+            severity: critical
+          annotations:
+            summary: "Kafka Connect connector {{ $labels.connector }} task is not in running status"
+            description: "Kafka Connect connector {{ $labels.connector }} task is detected to be not in running status for more than 5 minutes, which may indicate a problem."

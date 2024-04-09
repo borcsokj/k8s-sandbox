@@ -1,0 +1,12 @@
+controller:
+  enabled: true
+  image:
+    tag: v0.14.4
+  logLevel: 'info'
+speaker:
+  enabled: true
+  image:
+    tag: v0.14.4
+frr:
+  image:
+    tag: v0.14.4

@@ -1,0 +1,125 @@
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: httpbin
+  namespace: sandbox
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: httpbin
+  namespace: sandbox
+  labels:
+    app: httpbin
+    service: httpbin
+spec:
+  ports:
+  - name: http
+    port: 8000
+    targetPort: 80
+  selector:
+    app: httpbin
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: httpbin
+  namespace: sandbox
+#  annotations:
+#    reloader.stakater.com/auto: "true"
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: httpbin
+      version: v1
+  template:
+    metadata:
+      labels:
+        app: httpbin
+        version: v1
+    spec:
+      serviceAccountName: httpbin
+      containers:
+      - image: docker.io/kong/httpbin
+        imagePullPolicy: IfNotPresent
+        name: httpbin
+        ports:
+        - containerPort: 80
+---
+apiVersion: kafka.strimzi.io/v1beta2
+kind: KafkaTopic
+metadata:
+  name: sandbox-topic
+  namespace: kafka
+  labels:
+    strimzi.io/cluster: my-cluster
+spec:
+  partitions: 12
+  replicas: 3
+  topicName: 'sandbox.status'
+  config:
+    retention.ms: 7200000
+    segment.bytes: 1000000
+---
+apiVersion: kafka.strimzi.io/v1beta2
+kind: KafkaConnector
+metadata:
+  name: debezium-connector-sandbox
+  namespace: kafka
+  labels:
+    strimzi.io/cluster: debezium-connect-cluster
+spec:
+  class: io.debezium.connector.postgresql.PostgresConnector
+  tasksMax: 1
+  config:
+    tasks.max: 1
+    database.hostname: pg-sandbox-rw.databases
+    database.port: 5432
+    database.user: ${secrets:databases/pg-postgres-secret:username}
+    database.password: ${secrets:databases/pg-postgres-secret:password}
+    database.dbname: sandbox
+    # database.sslmode: disable
+    plugin.name: pgoutput
+    topic.prefix: sandbox
+    table.include.list: 'public.exchange_rates,debezium.heartbeat'
+    schema.history.internal.kafka.bootstrap.servers: my-cluster-kafka-bootstrap:9092
+    schema.history.internal.kafka.topic: schema-changes.sandbox
+    skip.messages.without.change: true
+    transforms: 'changes'
+    transforms.changes.type: 'io.debezium.transforms.ExtractChangedRecordState'
+    transforms.changes.header.changed.name: 'Changed'
+    transforms.changes.header.unchanged.name: 'Unchanged'
+    tombstones.on.delete: 'false'
+    slot.name: 'debezium'
+    heartbeat.interval.ms: '10000'
+    heartbeat.action.query: 'UPDATE "debezium"."heartbeat" SET "last_heartbeat_ts" = CURRENT_TIMESTAMP'
+    session.timeout.ms: '5000'
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: httpbin-http
+  namespace: sandbox
+spec:
+  parentRefs:
+    - name: sandbox-gateway
+      namespace: istio-ingress
+  hostnames: ["httpbin.sandbox"]
+  rules:
+  - matches:
+    - path:
+        type: PathPrefix
+        value: /get
+    - path:
+        type: PathPrefix
+        value: /headers
+    backendRefs:
+      - name: httpbin
+        port: 8000
+    filters:
+      - requestHeaderModifier:
+          add:
+            - name: my-added-header
+              value: added-value
+        type: RequestHeaderModifier

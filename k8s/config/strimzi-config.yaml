@@ -1,0 +1,7 @@
+dashboards:
+  enabled: true
+  namespace: monitoring
+featureGates: +UseKRaft,+KafkaNodePools,+UnidirectionalTopicOperator
+# watchNamespaces:
+#   - kafka
+watchAnyNamespace: true

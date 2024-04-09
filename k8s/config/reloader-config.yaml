@@ -1,0 +1,4 @@
+reloader:
+  ignoreSecrets: false
+  ignoreConfigMaps: false
+  ignoreNamespaces: ""

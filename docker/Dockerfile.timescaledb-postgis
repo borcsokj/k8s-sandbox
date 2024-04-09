@@ -1,0 +1,6 @@
+FROM ghcr.io/imusmanmalik/timescaledb-postgis:16-3.4
+
+USER root:root
+RUN localedef -i hu_HU -c -f UTF-8 -A /usr/share/locale/locale.alias hu_HU.UTF-8
+USER 26:999
+
