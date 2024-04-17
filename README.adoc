@@ -79,7 +79,7 @@ Skaffold/DevSpace?
 container images (defined by operator/helm)
 - ghcr.io/cloudnative-pg/cloudnative-pg:1.22.2
 - quay.io/strimzi/operator:0.40.0
-- quay.io/artemiscloud/activemq-artemis-operator:1.2.0
+- quay.io/artemiscloud/activemq-artemis-operator:1.2.1
 - ghcr.io/stakater/reloader:v1.0.72
 - docker.io/bitnami/sealed-secrets-controller:0.26.1
 
